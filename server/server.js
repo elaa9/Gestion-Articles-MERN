@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -9,18 +8,30 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'secret_jwt_polytechnique_sousse_2026';
-app.use(cors({ origin: process.env.CLIENT_URL || '*' }));
-// ==============================================================================
-// 1. GLOBAL MIDDLEWARES : CORS & JSON
-// ==============================================================================
 
-app.use(cors({ origin: process.env.CLIENT_URL || '*' }));
+// ==============================================================================
+// 1. Middlewares Globaux : CORS & JSON
+// ==============================================================================
+// Autorise CLIENT_URL, localhost, ou toute URL Vercel (*.vercel.app)
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(',').map((u) => u.trim())
+  : ['*'];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    }
+  })
+);
 app.use(express.json());
 
 // ==============================================================================
-// 2. USERS & ARTICLES DATA
+// 2. Comptes Utilisateurs & Articles en Base (Prêts pour le TP sans configuration)
 // ==============================================================================
-
 const users = [
   {
     id: 'u1',
@@ -63,87 +74,61 @@ let articles = [
 ];
 
 // ==============================================================================
-// 3. JWT MIDDLEWARE : PROTECT
+// 3. Middleware Sentinelle JWT (protect) -- Rappel de la Séance 3 !
 // ==============================================================================
-
 const protect = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
+  // Vérifier la présence du badge "Bearer <token>"
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({
-      message: 'Accès refusé : Token JWT manquant.'
+      message: 'Accès refusé (401) : Vous devez être connecté (Token JWT manquant).'
     });
   }
 
   try {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
-
-    req.user = decoded;
+    req.user = decoded; // { id, name, email, role }
     next();
-
   } catch (err) {
     return res.status(401).json({
-      message: 'Accès refusé : Token JWT invalide ou expiré.'
+      message: 'Accès refusé (401) : Token JWT invalide ou expiré.'
     });
   }
 };
 
 // ==============================================================================
-// 4. AUTHENTICATION ROUTES
+// 4. Routes d'Authentification (/api/auth/login & /api/auth/register)
 // ==============================================================================
-
-// LOGIN
 app.post('/api/auth/login', (req, res) => {
   const { email, password } = req.body;
 
   const user = users.find(
-    (u) =>
-      u.email.toLowerCase() === (email || '').trim().toLowerCase() &&
-      u.password === password
+    (u) => u.email.toLowerCase() === (email || '').trim().toLowerCase() && u.password === password
   );
 
   if (!user) {
     return res.status(401).json({
-      message: 'Identifiants incorrects.'
+      message: 'Identifiants incorrects. Essayez gueddes@poly.tn / 123456'
     });
   }
 
-  const userInfo = {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role
-  };
+  const userInfo = { id: user.id, name: user.name, email: user.email, role: user.role };
+  const token = jwt.sign(userInfo, JWT_SECRET, { expiresIn: '24h' });
 
-  const token = jwt.sign(userInfo, JWT_SECRET, {
-    expiresIn: '24h'
-  });
-
-  res.status(200).json({
-    user: userInfo,
-    token
-  });
+  res.status(200).json({ user: userInfo, token });
 });
 
-// REGISTER
 app.post('/api/auth/register', (req, res) => {
   const { name, email, password } = req.body;
-
   if (!name || !email || !password) {
-    return res.status(400).json({
-      message: 'Nom, email et mot de passe obligatoires.'
-    });
+    return res.status(400).json({ message: 'Nom, email et mot de passe obligatoires.' });
   }
 
-  const exists = users.find(
-    (u) => u.email.toLowerCase() === email.trim().toLowerCase()
-  );
-
+  const exists = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
   if (exists) {
-    return res.status(409).json({
-      message: 'Cet email est déjà utilisé.'
-    });
+    return res.status(409).json({ message: 'Cet email est déjà utilisé.' });
   }
 
   const newUser = {
@@ -153,86 +138,56 @@ app.post('/api/auth/register', (req, res) => {
     password,
     role: 'Auteur'
   };
-
   users.push(newUser);
 
-  const userInfo = {
-    id: newUser.id,
-    name: newUser.name,
-    email: newUser.email,
-    role: newUser.role
-  };
+  const userInfo = { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role };
+  const token = jwt.sign(userInfo, JWT_SECRET, { expiresIn: '24h' });
 
-  const token = jwt.sign(userInfo, JWT_SECRET, {
-    expiresIn: '24h'
-  });
-
-  res.status(201).json({
-    user: userInfo,
-    token
-  });
+  res.status(201).json({ user: userInfo, token });
 });
 
 // ==============================================================================
-// 5. ARTICLES ROUTES : GET PUBLIC, POST & DELETE PROTECTED
+// 5. Routes Articles (/api/articles) : GET Public, POST & DELETE Protégés par JWT
 // ==============================================================================
 
-// GET : Public - Everyone can read articles
+// PUBLIQUE : Tout le monde peut lire les articles
 app.get('/api/articles', (req, res) => {
   res.status(200).json(articles);
 });
 
-// POST : Protected - Only authenticated users can publish
+// PROTÉGÉE PAR JWT : Seul un utilisateur connecté peut publier un article
 app.post('/api/articles', protect, (req, res) => {
   const { title, category } = req.body;
-
-  if (typeof title !== 'string' || !title.trim()) {
-    return res.status(400).json({
-      message: "Le titre de l'article est obligatoire."
-    });
+  if (!title || !title.trim()) {
+    return res.status(400).json({ message: 'Le titre de l article est obligatoire.' });
   }
 
   const newArticle = {
     id: Date.now().toString(),
     title: title.trim(),
-    author: req.user.name,
+    author: req.user.name, // Le nom de l'auteur vient directement du Token JWT !
     category: category || 'Architecture Web',
     createdAt: new Date().toISOString()
   };
 
   articles.unshift(newArticle);
-
   res.status(201).json(newArticle);
 });
 
-// DELETE : Protected - Only authenticated users can delete
+// PROTÉGÉE PAR JWT : Seul un utilisateur connecté peut supprimer un article
 app.delete('/api/articles/:id', protect, (req, res) => {
-  const index = articles.findIndex(
-    (article) => article.id === req.params.id
-  );
-
+  const index = articles.findIndex((a) => a.id === req.params.id);
   if (index === -1) {
-    return res.status(404).json({
-      message: 'Article introuvable.'
-    });
+    return res.status(404).json({ message: 'Article introuvable.' });
   }
-
   const deleted = articles.splice(index, 1)[0];
-
-  res.status(200).json({
-    message: 'Article supprimé.',
-    id: deleted.id
-  });
+  res.status(200).json({ message: 'Article supprimé.', id: deleted.id });
 });
 
-// ==============================================================================
-// 6. START SERVER
-// ==============================================================================
-
 app.listen(PORT, () => {
-  console.log('====================================================');
-  console.log('🚀 MERN Server - Séance 6 (JWT)');
+  console.log(`====================================================`);
+  console.log(`🚀 Serveur MERN Décalé (Séance 6 - JWT) en écoute sur :`);
   console.log(`👉 http://localhost:${PORT}`);
-  console.log('🔑 Demo: gueddes@poly.tn | Password: 123456');
-  console.log('====================================================');
+  console.log(`🔑 Compte Démo : gueddes@poly.tn | Mot de passe : 123456`);
+  console.log(`====================================================`);
 });
